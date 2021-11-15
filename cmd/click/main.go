@@ -11,11 +11,15 @@ import (
 
 	_ "github.com/ClickHouse/clickhouse-go"
 	"github.com/nikandfor/cli"
+	click "github.com/nikandfor/clickhouse"
 	"github.com/nikandfor/errors"
 	"github.com/nikandfor/graceful"
 	"github.com/nikandfor/tlog"
 	"github.com/nikandfor/tlog/ext/tlflag"
 
+	"github.com/nikandfor/clickhouse/binary"
+	"github.com/nikandfor/clickhouse/clpool"
+	"github.com/nikandfor/clickhouse/dsn"
 	"github.com/nikandfor/clickhouse/proxy"
 )
 
@@ -116,32 +120,68 @@ func before(c *cli.Command) error {
 }
 
 func proxyRun(c *cli.Command) (err error) {
-	p, err := proxy.New(c.String("dsn"))
+	tr := tlog.Start("clickhouse_proxy")
+	defer func() { tr.Finish("err", err) }()
+
+	ctx := context.Background()
+	ctx = tlog.ContextWithSpan(ctx, tr)
+
+	d, err := dsn.Parse(c.String("dsn"))
 	if err != nil {
-		return errors.Wrap(err, "new proxy")
+		return errors.Wrap(err, "parse dsn")
 	}
+
+	pool := NewBinaryPool(d)
+
+	p := proxy.New(pool)
 
 	l, err := net.Listen("tcp", c.String("listen"))
 	if err != nil {
 		return errors.Wrap(err, "listen")
 	}
 
-	tlog.Printw("listening", "listen", l.Addr())
-
-	ctx := context.Background()
-
-	ctx = tlog.ContextWithSpan(ctx, tlog.Span{Logger: tlog.DefaultLogger})
+	tr.Printw("listening", "listen", l.Addr())
 
 	err = graceful.Shutdown(ctx, func(ctx context.Context) error {
-		return p.ServeContext(ctx, l)
-	},
-		graceful.WithStop(p.Shutdown),
-		graceful.WithForceStop(func(i int) {
-			tlog.Printw("Ctrl-C more to kill...")
-		}),
-	)
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return errors.Wrap(err, "accept")
+			}
 
-	return err
+			srv := binary.NewServerConn(conn)
+
+			go func() {
+				defer conn.Close()
+
+				_ = p.HandleConn(ctx, srv) // error is logged in trace
+			}()
+		}
+	}, graceful.WithStop(func() {
+		err := l.Close()
+		if err != nil {
+			tr.Printw("close listener", "err", err)
+		}
+	}), graceful.WithForceStop(func(i int) {
+		tr.Printw("Ctrl-C more to kill...", "more_to_kill", i+1)
+	}))
+
+	return nil
+}
+
+func NewBinaryPool(d *dsn.DSN) *clpool.ConnectionsPool {
+	return &clpool.ConnectionsPool{New: func(ctx context.Context) (_ click.Client, err error) {
+		conn, err := net.Dial("tcp", d.Hosts[0])
+		if err != nil {
+			return nil, errors.Wrap(err, "dial")
+		}
+
+		cl := binary.NewClient(conn)
+
+		cl.Client.Name = "ClickHouse clien"
+
+		return cl, nil
+	}}
 }
 
 func testQuery(c *cli.Command) (err error) {

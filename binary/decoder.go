@@ -18,11 +18,7 @@ type Decoder struct {
 
 func NewDecoder(r io.Reader) *Decoder {
 	if tlog.If("dump_decoder") {
-		r = Dump{
-			Reader:  r,
-			Span:    tlog.Root(),
-			Callers: 5,
-		}
+		// TODO
 	}
 
 	return &Decoder{

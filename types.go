@@ -1,4 +1,4 @@
-package wire
+package clickhouse
 
 import (
 	"fmt"
@@ -18,8 +18,7 @@ type (
 
 		Info []byte
 
-		Client string
-		Ver    [3]int
+		Client Agent
 	}
 
 	QueryMeta []Column
@@ -28,12 +27,12 @@ type (
 		Name string
 		Type string
 
-		Data []byte
+		RawData []byte
 	}
 
 	Block struct {
 		Table string
-		Info  []byte
+		//	Info  []byte
 
 		Rows int
 		Cols []Column
@@ -63,13 +62,20 @@ type (
 		RowsBeforeLimit     uint64
 		CalcRowsBeforeLimit uint64
 	}
+
+	Agent struct {
+		Name string
+		Ver  Ver
+	}
+
+	Ver [3]int
 )
 
 var insertRE = regexp.MustCompile(`^(?i)INSERT INTO`)
 
 func (q *Query) IsInsert() bool { return insertRE.MatchString(q.Query) }
 
-func (b *Block) IsEmpty() bool { return true }
+func (b *Block) IsEmpty() bool { return b.Rows == 0 && len(b.Cols) == 0 }
 
 func (e *Exception) Error() string {
 	return fmt.Sprintf("%v (%x): %v", e.Name, e.Code, e.Message)

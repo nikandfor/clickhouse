@@ -26,11 +26,7 @@ type (
 
 func NewEncoder(w io.Writer) *Encoder {
 	if tlog.If("dump_encoder") {
-		w = Dump{
-			Writer:  w,
-			Span:    tlog.Root(),
-			Callers: 5,
-		}
+		// TODO
 	}
 
 	return &Encoder{
