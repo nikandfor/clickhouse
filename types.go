@@ -77,6 +77,17 @@ func (q *Query) IsInsert() bool { return insertRE.MatchString(q.Query) }
 
 func (b *Block) IsEmpty() bool { return b.Rows == 0 && len(b.Cols) == 0 }
 
+func (b *Block) DataSize() (size int64) {
+	for _, col := range b.Cols {
+		size += int64(1 + len(col.Name))
+		size += int64(1 + len(col.Type))
+
+		size += int64(len(col.RawData))
+	}
+
+	return
+}
+
 func (e *Exception) Error() string {
 	return fmt.Sprintf("%v (%x): %v", e.Name, e.Code, e.Message)
 }

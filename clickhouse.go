@@ -49,10 +49,14 @@ type (
 	Server interface {
 		HandleConn(context.Context, ServerConn) error
 		HandleRequest(context.Context, ServerConn) error
+
+		io.Closer
 	}
 
 	ClientPool interface {
 		Get(context.Context) (Client, error)
 		Put(context.Context, Client, error) error
+
+		io.Closer
 	}
 )

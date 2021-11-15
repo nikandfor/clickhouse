@@ -7,7 +7,10 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	_ "github.com/ClickHouse/clickhouse-go"
 	"github.com/nikandfor/cli"
@@ -17,6 +20,7 @@ import (
 	"github.com/nikandfor/tlog"
 	"github.com/nikandfor/tlog/ext/tlflag"
 
+	"github.com/nikandfor/clickhouse/batcher"
 	"github.com/nikandfor/clickhouse/binary"
 	"github.com/nikandfor/clickhouse/clpool"
 	"github.com/nikandfor/clickhouse/dsn"
@@ -34,6 +38,11 @@ func main() {
 
 			cli.NewFlag("user", "default", ""),
 			cli.NewFlag("pass", "", ""),
+
+			cli.NewFlag("batch", false, "collect inserts into batches"),
+			cli.NewFlag("batch-max-interval", time.Minute, "max time to wait for batch to commit"),
+			cli.NewFlag("batch-max-rows", 1000000, "max rows in the batch"),
+			cli.NewFlag("batch-max-size", "100MiB", "max batch size"),
 		},
 	}
 
@@ -131,9 +140,32 @@ func proxyRun(c *cli.Command) (err error) {
 		return errors.Wrap(err, "parse dsn")
 	}
 
-	pool := NewBinaryPool(d)
+	var pool click.ClientPool
+
+	pool = NewBinaryPool(d)
+
+	if c.Bool("batch") {
+		b := batcher.New(ctx, pool)
+
+		b.MaxInterval = c.Duration("batch-max-interval")
+		b.MaxRows = c.Int("batch-max-rows")
+
+		b.MaxBytes, err = parseSize(c.String("batch-max-size"))
+		if err != nil {
+			return errors.Wrap(err, "parse batch size")
+		}
+
+		pool = b
+	}
 
 	p := proxy.New(pool)
+
+	defer func() {
+		e := p.Close()
+		if err == nil {
+			err = errors.Wrap(e, "close proxy")
+		}
+	}()
 
 	l, err := net.Listen("tcp", c.String("listen"))
 	if err != nil {
@@ -150,6 +182,10 @@ func proxyRun(c *cli.Command) (err error) {
 			}
 
 			srv := binary.NewServerConn(conn)
+
+			srv.Server.Name = "gh/nikandfor/clickhouse"
+
+			srv.Auth = nil // TODO
 
 			go func() {
 				defer conn.Close()
@@ -178,7 +214,7 @@ func NewBinaryPool(d *dsn.DSN) *clpool.ConnectionsPool {
 
 		cl := binary.NewClient(conn)
 
-		cl.Client.Name = "ClickHouse clien"
+		cl.Client.Name = "gh/nikandfor/clickhouse"
 
 		return cl, nil
 	}}
@@ -303,4 +339,37 @@ func testExec(c *cli.Command) (err error) {
 	tlog.Printw("committed")
 
 	return nil
+}
+
+func parseSize(s string) (sz int64, err error) {
+	parts := regexp.MustCompile(`^(\d+)((?:[KMG]i?)?B)$`).FindStringSubmatch(s)
+
+	tlog.Printw("parts", "parts", parts)
+
+	if len(parts) != 3 {
+		return 0, errors.New("bad value: %v", s)
+	}
+
+	sz, err = strconv.ParseInt(parts[1], 10, 64)
+	if err != nil {
+		return
+	}
+
+	if parts[2] == "" {
+		return sz, nil
+	}
+
+	switch parts[2][0] {
+	case 'B':
+	case 'K':
+		sz <<= 10
+	case 'M':
+		sz <<= 20
+	case 'G':
+		sz <<= 30
+	default:
+		panic(parts[2])
+	}
+
+	return sz, nil
 }

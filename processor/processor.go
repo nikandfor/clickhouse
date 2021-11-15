@@ -4,14 +4,24 @@ import (
 	"context"
 
 	click "github.com/nikandfor/clickhouse"
+	"github.com/nikandfor/errors"
 )
 
 type (
 	Processor struct {
 		pool click.ClientPool
+
+		OnQuery func(ctx context.Context, q *click.Query) (*click.Query, error)
+		OnMeta  func(ctx context.Context, m click.QueryMeta) (click.QueryMeta, error)
+
+		OnSendBlock func(ctx context.Context, b *click.Block) (*click.Block, error)
+		OnRecvBlock func(ctx context.Context, b *click.Block) (*click.Block, error)
 	}
 
 	client struct {
+		p *Processor
+
+		cl click.Client
 	}
 )
 
@@ -24,12 +34,26 @@ func New(cl click.ClientPool) *Processor {
 	return &Processor{pool: cl}
 }
 
-func (b *Processor) Get(ctx context.Context) (_ click.Client, err error) {
-	return &client{}, nil
+func (p *Processor) Get(ctx context.Context) (_ click.Client, err error) {
+	cl, err := p.pool.Get(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return &client{
+		p:  p,
+		cl: cl,
+	}, nil
 }
 
-func (b *Processor) Put(ctx context.Context, cl click.Client, err error) error {
-	return nil
+func (p *Processor) Put(ctx context.Context, cl click.Client, err error) error {
+	return p.pool.Put(ctx, cl.(*client).cl, err)
+}
+
+func (p *Processor) Close() (err error) {
+	err = p.pool.Close()
+
+	return errors.Wrap(err, "connections pool")
 }
 
 //
@@ -39,35 +63,73 @@ func (c *client) Hello(ctx context.Context) error {
 }
 
 func (c *client) NextPacket(ctx context.Context) (tp click.ServerPacket, err error) {
-	panic("nea")
+	return c.cl.NextPacket(ctx)
 }
 
-func (c *client) SendQuery(ctx context.Context, q *click.Query) (click.QueryMeta, error) {
-	panic("nea")
+func (c *client) SendQuery(ctx context.Context, q *click.Query) (meta click.QueryMeta, err error) {
+	if c.p.OnQuery != nil {
+		q, err = c.p.OnQuery(ctx, q)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	meta, err = c.cl.SendQuery(ctx, q)
+	if err != nil {
+		return
+	}
+
+	if c.p.OnMeta != nil {
+		meta, err = c.p.OnMeta(ctx, meta)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return meta, nil
 }
 
 func (c *client) CancelQuery(ctx context.Context) error {
-	panic("nea")
+	return c.cl.CancelQuery(ctx)
 }
 
-func (c *client) SendBlock(ctx context.Context, b *click.Block, compr bool) error {
-	panic("nea")
+func (c *client) RecvBlock(ctx context.Context, compr bool) (b *click.Block, err error) {
+	b, err = c.cl.RecvBlock(ctx, compr)
+	if err != nil {
+		return
+	}
+
+	if c.p.OnRecvBlock != nil {
+		b, err = c.p.OnRecvBlock(ctx, b)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return b, nil
 }
 
-func (c *client) RecvBlock(ctx context.Context) (b *click.Block, compr bool, err error) {
-	panic("nea")
+func (c *client) SendBlock(ctx context.Context, b *click.Block, compr bool) (err error) {
+	if c.p.OnSendBlock != nil {
+		b, err = c.p.OnSendBlock(ctx, b)
+		if err != nil {
+			return err
+		}
+	}
+
+	return c.cl.SendBlock(ctx, b, compr)
 }
 
-func (c *client) RecvException(context.Context) (*click.Exception, error) {
-	panic("nea")
+func (c *client) RecvException(ctx context.Context) error {
+	return c.cl.RecvException(ctx)
 }
 
-func (c *client) RecvProgress(context.Context) (click.Progress, error) {
-	panic("nea")
+func (c *client) RecvProgress(ctx context.Context) (click.Progress, error) {
+	return c.cl.RecvProgress(ctx)
 }
 
-func (c *client) RecvProfileInfo(context.Context) (click.ProfileInfo, error) {
-	panic("nea")
+func (c *client) RecvProfileInfo(ctx context.Context) (click.ProfileInfo, error) {
+	return c.cl.RecvProfileInfo(ctx)
 }
 
 func (c *client) Close() error { panic("nah") }

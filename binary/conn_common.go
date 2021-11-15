@@ -135,7 +135,15 @@ func (c *conn) sendBlock(ctx context.Context, pk int, b *click.Block, compr bool
 		return
 	}
 
-	err = c.e.String(b.Table)
+	tab := ""
+	cols, rows := 0, 0
+
+	if b != nil {
+		tab = b.Table
+		cols, rows = len(b.Cols), b.Rows
+	}
+
+	err = c.e.String(tab)
 	if err != nil {
 		return
 	}
@@ -145,9 +153,13 @@ func (c *conn) sendBlock(ctx context.Context, pk int, b *click.Block, compr bool
 		defer c.e.SetCompressed(false)
 	}
 
-	err = c.sendBlockHeader(len(b.Cols), b.Rows)
+	err = c.sendBlockHeader(cols, rows)
 	if err != nil {
 		return
+	}
+
+	if b == nil {
+		return nil
 	}
 
 	for _, col := range b.Cols {

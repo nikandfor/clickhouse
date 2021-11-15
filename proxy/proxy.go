@@ -102,13 +102,23 @@ func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn) (err er
 	}
 
 	if q.IsInsert() {
+	loop:
 		for {
 			pk, err := srv.NextPacket(ctx)
 			if err != nil {
 				return errors.Wrap(err, "client: recv packet")
 			}
 
-			if pk != click.ClientData {
+			switch pk {
+			case click.ClientData:
+			case click.ClientCancel:
+				err = cl.CancelQuery(ctx)
+				if err != nil {
+					return errors.Wrap(err, "send cancel")
+				}
+
+				break loop
+			default:
 				return errors.Wrap(err, "client: unexpected packet: %x", pk)
 			}
 
@@ -125,6 +135,8 @@ func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn) (err er
 			if b.IsEmpty() {
 				break
 			}
+
+			tr.V("blocks").Printw("client block", "rows", b.Rows)
 		}
 	}
 
@@ -147,6 +159,10 @@ func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn) (err er
 			}
 
 			err = srv.SendBlock(ctx, b, q.Compressed)
+
+			if b.Rows != 0 {
+				tr.V("blocks").Printw("server block", "rows", b.Rows)
+			}
 		case click.ServerException:
 			err = cl.RecvException(ctx)
 			if _, ok := err.(*click.Exception); !ok {
@@ -176,4 +192,10 @@ func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn) (err er
 			return errors.Wrap(err, "client: send %x", pk)
 		}
 	}
+}
+
+func (p *Proxy) Close() (err error) {
+	err = p.pool.Close()
+
+	return errors.Wrap(err, "connections pool")
 }
