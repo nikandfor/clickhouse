@@ -34,7 +34,7 @@ func main() {
 		Action:      proxyRun,
 		Flags: []*cli.Flag{
 			cli.NewFlag("listen,l", ":9000", "address to listen to"),
-			cli.NewFlag("dsn,dst,d", "tcp://:8900", "clickhouse address"),
+			cli.NewFlag("dsn,dst,db,d", "tcp://:8900", "clickhouse address"),
 
 			cli.NewFlag("user", "default", ""),
 			cli.NewFlag("pass", "", ""),
@@ -202,7 +202,7 @@ func proxyRun(c *cli.Command) (err error) {
 		tr.Printw("Ctrl-C more to kill...", "more_to_kill", i+1)
 	}))
 
-	return nil
+	return err
 }
 
 func NewBinaryPool(d *dsn.DSN) *clpool.ConnectionsPool {
