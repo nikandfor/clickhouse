@@ -26,8 +26,9 @@ type (
 
 		committerCtx    context.Context
 		committerCancel func()
-		committerErr    error
 		committerDone   chan struct{}
+
+		tr tlog.Span
 	}
 
 	batch struct {
@@ -37,18 +38,22 @@ type (
 		block *click.Block
 
 		lastCommit time.Time
+
+		totalRows int
+
+		tr tlog.Span
 	}
 
 	client struct {
 		p *Batcher
 
 		// if transparent
-		cl click.Client
+		click.Client
 
 		// if not
 		b *batch
 
-		transparent bool
+		blocks []*click.Block
 	}
 )
 
@@ -78,7 +83,7 @@ func New(ctx context.Context, cl click.ClientPool) (p *Batcher) {
 	return p
 }
 
-func (p *Batcher) Get(ctx context.Context) (_ click.Client, err error) {
+func (p *Batcher) Get(ctx context.Context, opts ...click.ClientOption) (_ click.Client, err error) {
 	return &client{
 		p: p,
 	}, nil
@@ -95,18 +100,23 @@ func (p *Batcher) Close() error {
 
 	<-p.committerDone
 
-	return p.committerErr
+	return nil
 }
 
-func (p *Batcher) committer(ctx context.Context) {
+func (p *Batcher) committer(ctx context.Context, startedc chan struct{}) {
 	tr := tlog.SpawnFromContext(ctx, "batch_committer")
 	defer tr.Finish()
 
-	defer close(p.committerDone)
-
 	ctx = tlog.ContextWithSpan(ctx, tr)
 
+	p.tr = tr
+
+	close(startedc)
+
+	defer close(p.committerDone)
+
 	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
 
 loop:
 	for {
@@ -116,28 +126,46 @@ loop:
 			break loop
 		}
 
-		p.mu.Lock()
+		p.commitOrDelete(ctx)
+	}
 
-		for q, b := range p.bs {
-			err := p.commitIfNeeded(ctx, b, nil)
-			if err != nil {
-				tr.Printw("commit batch", "query", q, "err", err)
-			}
+	p.commitAll(ctx)
+}
+
+func (p *Batcher) commitOrDelete(ctx context.Context) {
+	tr := tlog.SpanFromContext(ctx)
+
+	defer p.mu.Unlock()
+	p.mu.Lock()
+
+	limit := p.now().Add(-time.Minute)
+
+	for q, b := range p.bs {
+		if b.lastCommit.Before(limit) && b.block.Rows == 0 {
+			b.tr.Finish("total_rows", b.totalRows)
+
+			delete(p.bs, q)
+
+			continue
 		}
 
-		p.mu.Unlock()
+		err := p.commitIfNeeded(ctx, b, nil, false)
+		if err != nil {
+			tr.Printw("commit batch", "query", q, "err", err)
+		}
 	}
+}
+
+func (p *Batcher) commitAll(ctx context.Context) {
+	tr := tlog.SpanFromContext(ctx)
 
 	defer p.mu.Unlock()
 	p.mu.Lock()
 
 	for q, b := range p.bs {
-		err := p.commitBatch(ctx, b)
+		err := p.commitIfNeeded(ctx, b, nil, true)
 		if err != nil {
 			tr.Printw("commit batch", "query", q, "err", err)
-		}
-		if p.committerErr == nil {
-			p.committerErr = err
 		}
 	}
 }
@@ -152,7 +180,11 @@ func (p *Batcher) batch(ctx context.Context, q *click.Query) (b *batch, err erro
 
 			p.committerCancel = cancel
 
-			go p.committer(ctx)
+			c := make(chan struct{})
+
+			go p.committer(ctx, c)
+
+			<-c
 		}
 
 		p.committerCtx = nil
@@ -163,12 +195,18 @@ func (p *Batcher) batch(ctx context.Context, q *click.Query) (b *batch, err erro
 		return b, nil
 	}
 
+	parent := tlog.SpanFromContext(ctx)
+
 	b = &batch{
 		q:     q,
 		block: &click.Block{},
+
+		lastCommit: p.now(),
+
+		tr: p.tr.Spawn("batch", tlog.KeyParent, parent.ID, "query", q.Query),
 	}
 
-	err = p.commitIfNeeded(ctx, b, nil)
+	err = p.commitIfNeeded(ctx, b, nil, false)
 	if err != nil {
 		return nil, errors.Wrap(err, "start batch")
 	}
@@ -178,45 +216,58 @@ func (p *Batcher) batch(ctx context.Context, q *click.Query) (b *batch, err erro
 	return b, nil
 }
 
+func (p *Batcher) addBlocks(ctx context.Context, batch *batch, blocks []*click.Block) (err error) {
+	for _, b := range blocks {
+		err = p.addBlock(ctx, batch, b)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func (p *Batcher) addBlock(ctx context.Context, batch *batch, b *click.Block) (err error) {
 	defer p.mu.Unlock()
 	p.mu.Lock()
 
-	err = p.commitIfNeeded(ctx, batch, b)
+	err = p.commitIfNeeded(ctx, batch, b, false)
 	if err != nil {
 		return
 	}
 
-	bl := batch.block
+	bb := batch.block
 
-	if len(b.Cols) != len(bl.Cols) {
+	if len(b.Cols) != len(bb.Cols) {
 		return errors.New("unequal blocks structure")
 	}
 
 	for i, col := range b.Cols {
-		cc := bl.Cols[i]
+		cc := bb.Cols[i]
 
 		if cc.Name != col.Name || cc.Type != col.Type {
 			return errors.New("unequal blocks structure")
 		}
 
-		bl.Cols[i].RawData = append(cc.RawData, col.RawData...)
+		bb.Cols[i].RawData = append(cc.RawData, col.RawData...)
 	}
 
-	bl.Rows += b.Rows
+	bb.Rows += b.Rows
 
 	return nil
 }
 
-func (p *Batcher) commitIfNeeded(ctx context.Context, batch *batch, b *click.Block) (err error) {
-	bl := batch.block
+func (p *Batcher) commitIfNeeded(ctx context.Context, batch *batch, b *click.Block, final bool) (err error) {
+	bb := batch.block
 
 	now := p.now()
 
-	if !(now.After(batch.lastCommit.Add(p.MaxInterval)) ||
+	if !(batch.meta == nil ||
+		final && bb.Rows != 0 ||
+		now.After(batch.lastCommit.Add(p.MaxInterval)) ||
 		b != nil &&
-			(p.MaxRows != 0 && bl.Rows+b.Rows > p.MaxRows ||
-				p.MaxBytes != 0 && 0x28+bl.DataSize()+b.DataSize() > p.MaxBytes)) {
+			(p.MaxRows != 0 && bb.Rows+b.Rows > p.MaxRows ||
+				p.MaxBytes != 0 && 0x28+bb.DataSize()+b.DataSize() > p.MaxBytes)) {
 		return nil
 	}
 
@@ -231,6 +282,9 @@ func (p *Batcher) commitIfNeeded(ctx context.Context, batch *batch, b *click.Blo
 }
 
 func (p *Batcher) commitBatch(ctx context.Context, b *batch) (err error) {
+	tr := b.tr.Spawn("batch_query", "rows", b.block.Rows, "initialize", b.meta == nil, tlog.KeyParent, tlog.IDFromContext(ctx), "from", loc.Callers(1, 3))
+	defer func() { tr.Finish("err", err, "", loc.Caller(1)) }()
+
 	cl, err := p.pool.Get(ctx)
 	if err != nil {
 		return errors.Wrap(err, "get client")
@@ -243,32 +297,25 @@ func (p *Batcher) commitBatch(ctx context.Context, b *batch) (err error) {
 		return errors.Wrap(err, "send query")
 	}
 
-	tr := tlog.SpanFromContext(ctx).V("batch")
-	if tr.Logger != nil {
-		defer func() {
-			tr.Printw("commit batch", "rows", b.block.Rows, "err", err, "from", loc.Callers(1, 3))
-		}()
-	}
-
 	// update meta anyway
 	defer func() {
 		b.meta = meta
 
-		bl := b.block
-		bl.Rows = 0
+		bb := b.block
+		bb.Rows = 0
 
-		if len(bl.Cols) != len(meta) {
-			bl.Cols = meta
+		if len(bb.Cols) != len(meta) {
+			bb.Cols = meta
 		}
 
 		for i, col := range meta {
 			var buf []byte
 
-			if i < len(bl.Cols) {
-				buf = bl.Cols[i].RawData
+			if i < len(bb.Cols) {
+				buf = bb.Cols[i].RawData
 			}
 
-			bl.Cols[i] = click.Column{
+			bb.Cols[i] = click.Column{
 				Name:    col.Name,
 				Type:    col.Type,
 				RawData: buf[:0],
@@ -298,6 +345,8 @@ func (p *Batcher) commitBatch(ctx context.Context, b *batch) (err error) {
 		return errors.Wrap(err, "get meta")
 	}
 
+	b.totalRows += b.block.Rows
+
 	return nil
 }
 
@@ -319,28 +368,22 @@ func (p *Batcher) consumeResponse(ctx context.Context, cl click.Client) (err err
 
 //
 
-func (c *client) Hello(ctx context.Context) error {
-	return nil
-}
-
 func (c *client) NextPacket(ctx context.Context) (tp click.ServerPacket, err error) {
-	if c.transparent {
-		return c.cl.NextPacket(ctx)
+	if c.Client != nil {
+		return c.Client.NextPacket(ctx)
 	}
 
 	return click.ServerEndOfStream, nil
 }
 
 func (c *client) SendQuery(ctx context.Context, q *click.Query) (meta click.QueryMeta, err error) {
-	c.transparent = !q.IsInsert()
-
-	if c.transparent {
-		c.cl, err = c.p.pool.Get(ctx)
+	if !q.IsInsert() {
+		c.Client, err = c.p.pool.Get(ctx)
 		if err != nil {
 			return nil, errors.Wrap(err, "get client")
 		}
 
-		return c.cl.SendQuery(ctx, q)
+		return c.Client.SendQuery(ctx, q)
 	}
 
 	c.b, err = c.p.batch(ctx, q)
@@ -351,40 +394,22 @@ func (c *client) SendQuery(ctx context.Context, q *click.Query) (meta click.Quer
 	return c.b.meta, nil
 }
 
-func (c *client) CancelQuery(ctx context.Context) (err error) {
-	return c.cl.CancelQuery(ctx)
-}
-
-func (c *client) RecvBlock(ctx context.Context, compr bool) (b *click.Block, err error) {
-	if c.transparent {
-		return c.cl.RecvBlock(ctx, compr)
-	}
-
-	panic("nea")
-}
-
 func (c *client) SendBlock(ctx context.Context, b *click.Block, compr bool) (err error) {
-	if c.transparent {
-		return c.cl.SendBlock(ctx, b, compr)
+	if c.Client != nil {
+		return c.Client.SendBlock(ctx, b, compr)
 	}
 
 	if b.IsEmpty() {
-		return nil
+		return c.p.addBlocks(ctx, c.b, c.blocks)
 	}
 
-	return c.p.addBlock(ctx, c.b, b)
+	c.blocks = append(c.blocks, b)
+
+	return nil
 }
 
-func (c *client) RecvException(ctx context.Context) error {
-	return c.cl.RecvException(ctx)
-}
+func (c *client) CancelQuery(ctx context.Context) error {
+	c.blocks = c.blocks[:0]
 
-func (c *client) RecvProgress(ctx context.Context) (click.Progress, error) {
-	return c.cl.RecvProgress(ctx)
+	return nil
 }
-
-func (c *client) RecvProfileInfo(ctx context.Context) (click.ProfileInfo, error) {
-	return c.cl.RecvProfileInfo(ctx)
-}
-
-func (c *client) Close() error { panic("nah") }

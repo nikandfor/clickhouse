@@ -34,8 +34,8 @@ func New(cl click.ClientPool) *Processor {
 	return &Processor{pool: cl}
 }
 
-func (p *Processor) Get(ctx context.Context) (_ click.Client, err error) {
-	cl, err := p.pool.Get(ctx)
+func (p *Processor) Get(ctx context.Context, opts ...click.ClientOption) (_ click.Client, err error) {
+	cl, err := p.pool.Get(ctx, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -57,10 +57,6 @@ func (p *Processor) Close() (err error) {
 }
 
 //
-
-func (c *client) Hello(ctx context.Context) error {
-	return nil
-}
 
 func (c *client) NextPacket(ctx context.Context) (tp click.ServerPacket, err error) {
 	return c.cl.NextPacket(ctx)

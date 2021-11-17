@@ -68,6 +68,12 @@ type (
 		Ver  Ver
 	}
 
+	Credentials struct {
+		Database string
+		User     string
+		Password string
+	}
+
 	Ver [3]int
 )
 
@@ -75,7 +81,18 @@ var insertRE = regexp.MustCompile(`^(?i)INSERT INTO`)
 
 func (q *Query) IsInsert() bool { return insertRE.MatchString(q.Query) }
 
-func (b *Block) IsEmpty() bool { return b.Rows == 0 && len(b.Cols) == 0 }
+func (q *Query) Copy() *Query {
+	return &Query{
+		Query:      q.Query,
+		ID:         q.ID,
+		QuotaKey:   q.QuotaKey,
+		Compressed: q.Compressed,
+		Info:       append([]byte{}, q.Info...),
+		Client:     q.Client,
+	}
+}
+
+func (b *Block) IsEmpty() bool { return b == nil || b.Rows == 0 && len(b.Cols) == 0 }
 
 func (b *Block) DataSize() (size int64) {
 	for _, col := range b.Cols {

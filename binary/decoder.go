@@ -41,6 +41,10 @@ func (d *Decoder) Read(p []byte) (int, error) {
 	return d.r.Read(p)
 }
 
+func (d *Decoder) ReadFull(p []byte) (int, error) {
+	return io.ReadFull(d.r, p)
+}
+
 func (d *Decoder) ReadByte() (b byte, err error) {
 	if r, ok := d.r.(io.ByteReader); ok {
 		return r.ReadByte()

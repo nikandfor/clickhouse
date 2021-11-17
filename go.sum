@@ -224,8 +224,8 @@ github.com/nikandfor/cli v0.0.0-20210105003942-afe14413f747/go.mod h1:xDROzJvdwq
 github.com/nikandfor/errors v0.3.1-0.20201212142705-56fda2c0e8b3/go.mod h1:YG1muM/ZtoVZ7rYhrFXUGLa9fRQ2yX5cs7LWiN8i8ho=
 github.com/nikandfor/errors v0.4.0 h1:uqU360iRTC5xYgRlQa0WjBHKYWvxdhudsFkQVCA/Nuo=
 github.com/nikandfor/errors v0.4.0/go.mod h1:YG1muM/ZtoVZ7rYhrFXUGLa9fRQ2yX5cs7LWiN8i8ho=
-github.com/nikandfor/graceful v0.0.0-20211111183817-b3444f87b25c h1:BZkq1+zNVesEatpgR6aRm2oZmvG4h94qur6KTnZAflw=
-github.com/nikandfor/graceful v0.0.0-20211111183817-b3444f87b25c/go.mod h1:Oa3b+wEPfLWTAS19zrNTemiGel6ObnQUtzOgEcbgN38=
+github.com/nikandfor/graceful v0.0.0-20211115215916-d1e69cb51d77 h1:z3CP5wgxrXFUXi65zx174GGAyzrY1EQog2iLGNKxUdc=
+github.com/nikandfor/graceful v0.0.0-20211115215916-d1e69cb51d77/go.mod h1:Oa3b+wEPfLWTAS19zrNTemiGel6ObnQUtzOgEcbgN38=
 github.com/nikandfor/loc v0.0.0-20201209201630-39582039abc5/go.mod h1:LZpmiieVWcBawLft3ptIUwVVweU6shBWbnEiitLzKG8=
 github.com/nikandfor/loc v0.1.1-0.20210914135013-829520244234 h1:h/+TjvaTRwO2f5o9Thzfs480G06M5iF0Mtv2Jf2teHk=
 github.com/nikandfor/loc v0.1.1-0.20210914135013-829520244234/go.mod h1:LZpmiieVWcBawLft3ptIUwVVweU6shBWbnEiitLzKG8=

@@ -7,7 +7,7 @@ require (
 	github.com/google/cel-go v0.9.0
 	github.com/nikandfor/cli v0.0.0-20210105003942-afe14413f747
 	github.com/nikandfor/errors v0.4.0
-	github.com/nikandfor/graceful v0.0.0-20211111183817-b3444f87b25c
+	github.com/nikandfor/graceful v0.0.0-20211115215916-d1e69cb51d77
 	github.com/nikandfor/loc v0.1.1-0.20210914135013-829520244234
 	github.com/nikandfor/netpoll v0.0.0-20211115220203-25e4df8e6e67
 	github.com/nikandfor/tlog v0.12.2-0.20211110181733-1de114389e87

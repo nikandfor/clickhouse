@@ -2,12 +2,14 @@ package clickhouse
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"net"
 )
 
 type (
 	Client interface {
-		Hello(context.Context) error
+		//	Hello(context.Context) error
 
 		NextPacket(context.Context) (ServerPacket, error)
 
@@ -21,11 +23,11 @@ type (
 		RecvProgress(context.Context) (Progress, error)
 		RecvProfileInfo(context.Context) (ProfileInfo, error)
 
-		io.Closer
+		//	io.Closer
 	}
 
 	ServerConn interface {
-		Hello(context.Context) error
+		//	Hello(context.Context) error
 
 		NextPacket(context.Context) (ClientPacket, error)
 
@@ -43,18 +45,23 @@ type (
 
 		//	SendPong(context.Context) error
 
-		io.Closer
+		//	io.Closer
 	}
 
 	Server interface {
-		HandleConn(context.Context, ServerConn) error
-		HandleRequest(context.Context, ServerConn) error
+		Serve(context.Context, net.Listener) error
+		HandleConn(context.Context, net.Conn) error
+		HandleRequest(context.Context, ServerConn, ...ClientOption) error
 
 		io.Closer
 	}
 
+	ClientOption interface {
+		fmt.Stringer
+	}
+
 	ClientPool interface {
-		Get(context.Context) (Client, error)
+		Get(context.Context, ...ClientOption) (Client, error)
 		Put(context.Context, Client, error) error
 
 		io.Closer

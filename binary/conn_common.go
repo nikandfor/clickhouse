@@ -97,19 +97,19 @@ func (c *conn) RecvBlock(ctx context.Context, compr bool) (b *click.Block, err e
 		case tp == "UInt64" || tp == "Int64", strings.HasPrefix(tp, "DateTime64("):
 			d = make([]byte, 8*rows)
 
-			_, err = c.d.Read(d)
+			_, err = c.d.ReadFull(d)
 		case tp == "UInt32" || tp == "Int32":
 			d = make([]byte, 4*rows)
 
-			_, err = c.d.Read(d)
+			_, err = c.d.ReadFull(d)
 		case tp == "UInt16" || tp == "Int16" || tp == "Date":
 			d = make([]byte, 2*rows)
 
-			_, err = c.d.Read(d)
+			_, err = c.d.ReadFull(d)
 		case tp == "UInt8" || tp == "Int8":
 			d = make([]byte, rows)
 
-			_, err = c.d.Read(d)
+			_, err = c.d.ReadFull(d)
 		default:
 			return nil, errors.New("unsupported type: %v (col %v)", tp, name)
 		}
@@ -159,7 +159,7 @@ func (c *conn) sendBlock(ctx context.Context, pk int, b *click.Block, compr bool
 	}
 
 	if b == nil {
-		return nil
+		return c.e.Flush()
 	}
 
 	for _, col := range b.Cols {

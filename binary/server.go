@@ -333,6 +333,11 @@ func (c *Server) SendQueryMeta(ctx context.Context, meta click.QueryMeta, compr 
 		}
 	}
 
+	err = c.e.Flush()
+	if err != nil {
+		return
+	}
+
 	return nil
 }
 

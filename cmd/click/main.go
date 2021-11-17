@@ -21,7 +21,6 @@ import (
 	"github.com/nikandfor/tlog/ext/tlflag"
 
 	"github.com/nikandfor/clickhouse/batcher"
-	"github.com/nikandfor/clickhouse/binary"
 	"github.com/nikandfor/clickhouse/clpool"
 	"github.com/nikandfor/clickhouse/dsn"
 	"github.com/nikandfor/clickhouse/proxy"
@@ -39,8 +38,7 @@ func main() {
 			cli.NewFlag("user", "default", ""),
 			cli.NewFlag("pass", "", ""),
 
-			cli.NewFlag("batch", false, "collect inserts into batches"),
-			cli.NewFlag("batch-max-interval", time.Minute, "max time to wait for batch to commit"),
+			cli.NewFlag("batch-max-interval", time.Minute, "max time to wait for batch to commit. 0 to no batching"),
 			cli.NewFlag("batch-max-rows", 1000000, "max rows in the batch"),
 			cli.NewFlag("batch-max-size", "100MiB", "max batch size"),
 		},
@@ -142,12 +140,12 @@ func proxyRun(c *cli.Command) (err error) {
 
 	var pool click.ClientPool
 
-	pool = NewBinaryPool(d)
+	pool = clpool.NewBinaryPool(d.Hosts[0])
 
-	if c.Bool("batch") {
+	if q := c.Duration("batch-max-interval"); q != 0 {
 		b := batcher.New(ctx, pool)
 
-		b.MaxInterval = c.Duration("batch-max-interval")
+		b.MaxInterval = q
 		b.MaxRows = c.Int("batch-max-rows")
 
 		b.MaxBytes, err = parseSize(c.String("batch-max-size"))
@@ -175,24 +173,7 @@ func proxyRun(c *cli.Command) (err error) {
 	tr.Printw("listening", "listen", l.Addr())
 
 	err = graceful.Shutdown(ctx, func(ctx context.Context) error {
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				return errors.Wrap(err, "accept")
-			}
-
-			srv := binary.NewServerConn(conn)
-
-			srv.Server.Name = "gh/nikandfor/clickhouse"
-
-			srv.Auth = nil // TODO
-
-			go func() {
-				defer conn.Close()
-
-				_ = p.HandleConn(ctx, srv) // error is logged in trace
-			}()
-		}
+		return p.Serve(ctx, l)
 	}, graceful.WithStop(func() {
 		err := l.Close()
 		if err != nil {
@@ -203,21 +184,6 @@ func proxyRun(c *cli.Command) (err error) {
 	}))
 
 	return err
-}
-
-func NewBinaryPool(d *dsn.DSN) *clpool.ConnectionsPool {
-	return &clpool.ConnectionsPool{New: func(ctx context.Context) (_ click.Client, err error) {
-		conn, err := net.Dial("tcp", d.Hosts[0])
-		if err != nil {
-			return nil, errors.Wrap(err, "dial")
-		}
-
-		cl := binary.NewClient(conn)
-
-		cl.Client.Name = "gh/nikandfor/clickhouse"
-
-		return cl, nil
-	}}
 }
 
 func testQuery(c *cli.Command) (err error) {

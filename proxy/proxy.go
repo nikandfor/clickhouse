@@ -3,8 +3,11 @@ package proxy
 import (
 	"context"
 	"io"
+	"net"
 
 	click "github.com/nikandfor/clickhouse"
+	"github.com/nikandfor/clickhouse/binary"
+	"github.com/nikandfor/clickhouse/clpool"
 	"github.com/nikandfor/errors"
 	"github.com/nikandfor/loc"
 	"github.com/nikandfor/tlog"
@@ -26,19 +29,57 @@ func New(pool click.ClientPool) *Proxy {
 	}
 }
 
-func (p *Proxy) HandleConn(ctx context.Context, srv click.ServerConn) (err error) {
+func (p *Proxy) Serve(ctx context.Context, l net.Listener) (err error) {
+	tr := tlog.SpawnFromContext(ctx, "binary_proxy")
+	defer func() { tr.Finish("err", err, "", loc.Caller(1)) }()
+
+	for {
+		conn, err := l.Accept()
+		select {
+		case <-ctx.Done():
+			return nil
+		default:
+		}
+		if err != nil {
+			return errors.Wrap(err, "accept")
+		}
+
+		go p.HandleConn(ctx, conn)
+	}
+}
+
+func (p *Proxy) HandleConn(ctx context.Context, conn net.Conn) (err error) {
 	tr := tlog.SpawnFromContext(ctx, "connection")
 	defer func() { tr.Finish("err", err, "", loc.Caller(1)) }()
 
 	ctx = tlog.ContextWithSpan(ctx, tr)
+
+	if tr.If("dump_server,dump_conn") {
+		dc := binary.ConnDump(conn, tr)
+		dc.Callers = 5
+		conn = dc
+	}
+
+	defer conn.Close()
+
+	srv := binary.NewServerConn(conn)
+
+	srv.Server.Name = "gh/nikandfor/clickhouse"
+
+	srv.Auth = nil // TODO
 
 	err = srv.Hello(ctx)
 	if err != nil {
 		return errors.Wrap(err, "hello")
 	}
 
+	var clopts []click.ClientOption
+
+	//	clopts = append(clopts, clpool.WithDatabase(srv.Database))
+	clopts = append(clopts, clpool.WithCredentials(srv.Database, srv.User, srv.Password))
+
 	for err == nil {
-		err = p.HandleRequest(ctx, srv)
+		err = p.HandleRequest(ctx, srv, clopts...)
 	}
 
 	if errors.Is(err, io.EOF) {
@@ -48,7 +89,7 @@ func (p *Proxy) HandleConn(ctx context.Context, srv click.ServerConn) (err error
 	return
 }
 
-func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn) (err error) {
+func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn, clopts ...click.ClientOption) (err error) {
 	pk, err := srv.NextPacket(ctx)
 	if err != nil {
 		return errors.Wrap(err, "reading next request")
@@ -71,7 +112,7 @@ func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn) (err er
 		_ = srv.SendException(ctx, err)
 	}()
 
-	cl, err := p.pool.Get(ctx)
+	cl, err := p.pool.Get(ctx, clopts...)
 	if err != nil {
 		return errors.Wrap(err, "client")
 	}
@@ -102,43 +143,62 @@ func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn) (err er
 	}
 
 	if q.IsInsert() {
-	loop:
-		for {
-			pk, err := srv.NextPacket(ctx)
-			if err != nil {
-				return errors.Wrap(err, "client: recv packet")
-			}
-
-			switch pk {
-			case click.ClientData:
-			case click.ClientCancel:
-				err = cl.CancelQuery(ctx)
-				if err != nil {
-					return errors.Wrap(err, "send cancel")
-				}
-
-				break loop
-			default:
-				return errors.Wrap(err, "client: unexpected packet: %x", pk)
-			}
-
-			b, err := srv.RecvBlock(ctx, q.Compressed)
-			if err != nil {
-				return errors.Wrap(err, "client: recv block")
-			}
-
-			err = cl.SendBlock(ctx, b, q.Compressed)
-			if err != nil {
-				return errors.Wrap(err, "server: send block")
-			}
-
-			if b.IsEmpty() {
-				break
-			}
-
-			tr.V("blocks").Printw("client block", "rows", b.Rows)
+		err = p.sendData(ctx, srv, cl, q)
+		if err != nil {
+			return errors.Wrap(err, "send client data")
 		}
 	}
+
+	err = p.recvResponse(ctx, srv, cl, q)
+	if err != nil {
+		return errors.Wrap(err, "recv response")
+	}
+
+	return nil
+}
+
+func (p *Proxy) sendData(ctx context.Context, srv click.ServerConn, cl click.Client, q *click.Query) (err error) {
+	tr := tlog.SpanFromContext(ctx)
+
+	for {
+		pk, err := srv.NextPacket(ctx)
+		if err != nil {
+			return errors.Wrap(err, "client: recv packet")
+		}
+
+		switch pk {
+		case click.ClientData:
+		case click.ClientCancel:
+			err = cl.CancelQuery(ctx)
+			if err != nil {
+				return errors.Wrap(err, "send cancel")
+			}
+
+			return nil
+		default:
+			return errors.Wrap(err, "client: unexpected packet: %x", pk)
+		}
+
+		b, err := srv.RecvBlock(ctx, q.Compressed)
+		if err != nil {
+			return errors.Wrap(err, "client: recv block")
+		}
+
+		err = cl.SendBlock(ctx, b, q.Compressed)
+		if err != nil {
+			return errors.Wrap(err, "server: send block")
+		}
+
+		if b.IsEmpty() {
+			return nil
+		}
+
+		tr.V("blocks").Printw("client block", "rows", b.Rows)
+	}
+}
+
+func (p *Proxy) recvResponse(ctx context.Context, srv click.ServerConn, cl click.Client, q *click.Query) (err error) {
+	tr := tlog.SpanFromContext(ctx)
 
 	for {
 		pk, err := cl.NextPacket(ctx)
