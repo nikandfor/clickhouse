@@ -22,21 +22,20 @@ type (
 		// client request
 		Client click.Agent
 
-		Database string
-		User     string
-		Password string
+		Credentials click.Credentials
 	}
 )
 
 var _ click.ServerConn = &Server{}
 
-func NewServerConn(conn net.Conn) *Server {
+func NewServerConn(ctx context.Context, conn net.Conn) *Server {
 	return &Server{
-		conn: newConn(conn),
+		conn: newConn(ctx, conn),
 		Server: click.Agent{
 			Name: "Clickhouse",
 			Ver:  click.Ver{21, 11, 54450},
 		},
+		TimeZone: "UTC",
 	}
 }
 
@@ -84,17 +83,17 @@ func (c *Server) recvHello() (err error) {
 	c.Client.Name = n
 	c.Client.Ver = v
 
-	c.Database, err = c.d.String()
+	c.Credentials.Database, err = c.d.String()
 	if err != nil {
 		return
 	}
 
-	c.User, err = c.d.String()
+	c.Credentials.User, err = c.d.String()
 	if err != nil {
 		return
 	}
 
-	c.Password, err = c.d.String()
+	c.Credentials.Password, err = c.d.String()
 	if err != nil {
 		return
 	}

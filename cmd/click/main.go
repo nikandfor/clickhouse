@@ -156,7 +156,7 @@ func proxyRun(c *cli.Command) (err error) {
 		pool = b
 	}
 
-	p := proxy.New(pool)
+	p := proxy.New(ctx, pool)
 
 	defer func() {
 		e := p.Close()

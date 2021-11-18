@@ -3,6 +3,8 @@ package clickhouse
 import (
 	"fmt"
 	"regexp"
+
+	"github.com/nikandfor/tlog/wire"
 )
 
 type (
@@ -16,7 +18,7 @@ type (
 
 		//	Tables []ExtTable
 
-		Info []byte
+		//	Info []byte
 
 		Client Agent
 	}
@@ -63,21 +65,21 @@ type (
 		CalcRowsBeforeLimit uint64
 	}
 
-	Agent struct {
-		Name string
-		Ver  Ver
-	}
-
 	Credentials struct {
 		Database string
 		User     string
 		Password string
 	}
 
+	Agent struct {
+		Name string
+		Ver  Ver
+	}
+
 	Ver [3]int
 )
 
-var insertRE = regexp.MustCompile(`^(?i)INSERT INTO`)
+var insertRE = regexp.MustCompile(`^(?i)INSERT INTO`) // TODO: WITH
 
 func (q *Query) IsInsert() bool { return insertRE.MatchString(q.Query) }
 
@@ -87,8 +89,8 @@ func (q *Query) Copy() *Query {
 		ID:         q.ID,
 		QuotaKey:   q.QuotaKey,
 		Compressed: q.Compressed,
-		Info:       append([]byte{}, q.Info...),
-		Client:     q.Client,
+		//	Info:       append([]byte{}, q.Info...),
+		Client: q.Client,
 	}
 }
 
@@ -103,6 +105,31 @@ func (b *Block) DataSize() (size int64) {
 	}
 
 	return
+}
+
+func (b *Block) TlogAppend(e *wire.Encoder, buf []byte) []byte {
+	if b == nil {
+		return e.AppendNil(buf)
+	}
+
+	buf = e.AppendMap(buf, 3)
+
+	//	buf = e.AppendKeyInt(buf, "table", b.Table)
+	buf = e.AppendKeyInt(buf, "cols", len(b.Cols))
+	buf = e.AppendKeyInt(buf, "rows", b.Rows)
+	buf = e.AppendKeyInt64(buf, "size", b.DataSize())
+
+	return buf
+}
+
+func (m QueryMeta) TlogAppend(e *wire.Encoder, b []byte) []byte {
+	b = e.AppendMap(b, len(m))
+
+	for _, c := range m {
+		b = e.AppendKeyString(b, c.Name, c.Type)
+	}
+
+	return b
 }
 
 func (e *Exception) Error() string {

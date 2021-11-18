@@ -1,6 +1,7 @@
 package binary
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 
@@ -24,9 +25,9 @@ type (
 	}
 )
 
-func NewEncoder(w io.Writer) *Encoder {
-	if tlog.If("dump_encoder") {
-		// TODO
+func NewEncoder(ctx context.Context, w io.Writer) *Encoder {
+	if tr := tlog.SpanFromContext(ctx); tr.If("dump_encoder") {
+		w = NewDumpConn(w, tr)
 	}
 
 	return &Encoder{

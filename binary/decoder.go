@@ -1,6 +1,7 @@
 package binary
 
 import (
+	"context"
 	"encoding/binary"
 	"io"
 
@@ -16,9 +17,9 @@ type Decoder struct {
 	b []byte
 }
 
-func NewDecoder(r io.Reader) *Decoder {
-	if tlog.If("dump_decoder") {
-		// TODO
+func NewDecoder(ctx context.Context, r io.Reader) *Decoder {
+	if tr := tlog.SpanFromContext(ctx); tr.If("dump_decoder") {
+		r = NewDumpConn(r, tr)
 	}
 
 	return &Decoder{

@@ -22,9 +22,7 @@ type (
 		// client request
 		Client click.Agent
 
-		Database string
-		User     string
-		Password string
+		Credentials click.Credentials
 	}
 )
 
@@ -32,15 +30,17 @@ var _ click.Client = &Client{}
 
 var hostname, _ = os.Hostname()
 
-func NewClient(conn net.Conn) *Client {
+func NewClient(ctx context.Context, conn net.Conn) *Client {
 	return &Client{
-		conn: newConn(conn),
+		conn: newConn(ctx, conn),
 		Client: click.Agent{
 			Name: "Clickhouse clien",
 			Ver:  click.Ver{1, 1, 54213},
 		},
-		Database: "default",
-		User:     "default",
+		Credentials: click.Credentials{
+			Database: "default",
+			User:     "default",
+		},
 	}
 }
 
@@ -83,17 +83,17 @@ func (c *Client) sendHello() (err error) {
 		return
 	}
 
-	err = c.e.String(c.Database)
+	err = c.e.String(c.Credentials.Database)
 	if err != nil {
 		return
 	}
 
-	err = c.e.String(c.User)
+	err = c.e.String(c.Credentials.User)
 	if err != nil {
 		return
 	}
 
-	err = c.e.String(c.Password)
+	err = c.e.String(c.Credentials.Password)
 	if err != nil {
 		return
 	}

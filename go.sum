@@ -235,6 +235,10 @@ github.com/nikandfor/quantile v0.0.0-20201109213849-4905a12df281/go.mod h1:APrht
 github.com/nikandfor/tlog v0.12.1/go.mod h1:ptQczWIg3W5huOA+FwuLmw/79Ss7l3a7JvB4wkXC3gY=
 github.com/nikandfor/tlog v0.12.2-0.20211110181733-1de114389e87 h1:hmznLUqrK7DkeuW8GmvQd68uuOcC45dkV6M0Q0ykeG8=
 github.com/nikandfor/tlog v0.12.2-0.20211110181733-1de114389e87/go.mod h1:ChtG4LfUEbkHa7jG4adIhXLPMfao3hXDDtf3uAo0drY=
+github.com/nikandfor/tlog v0.12.2-0.20211118120830-80e9fb6ca715 h1:qI8nEMoJ4zpXFhPx5U5K9vQMkMaXM2LTXSdyQgaWFyM=
+github.com/nikandfor/tlog v0.12.2-0.20211118120830-80e9fb6ca715/go.mod h1:ChtG4LfUEbkHa7jG4adIhXLPMfao3hXDDtf3uAo0drY=
+github.com/nikandfor/tlog v0.12.2-0.20211118123435-4c1af02bbda3 h1:fQg3jbPvxaXioGGHuZTuUq95YsKQWbEPWVBdfm+wfjo=
+github.com/nikandfor/tlog v0.12.2-0.20211118123435-4c1af02bbda3/go.mod h1:ChtG4LfUEbkHa7jG4adIhXLPMfao3hXDDtf3uAo0drY=
 github.com/oklog/oklog v0.3.2/go.mod h1:FCV+B7mhrz4o+ueLpx+KqkyXRGMWOYEvfiXtdGtbWGs=
 github.com/oklog/run v1.0.0/go.mod h1:dlhp/R75TPv97u0XWUtDeV/lRKWPKSdTuV0TZvrmrQA=
 github.com/olekukonko/tablewriter v0.0.0-20170122224234-a0225b3f23b5/go.mod h1:vsDQFd/mU46D+Z4whnwzcISnGGzXWMclvtLoiIKAKIo=

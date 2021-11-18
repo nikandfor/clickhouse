@@ -23,13 +23,13 @@ type (
 	}
 )
 
-func newConn(c net.Conn) conn {
+func newConn(ctx context.Context, c net.Conn) conn {
 	r := bufio.NewReader(c)
 	w := bufio.NewWriter(c)
 
 	return conn{
-		d: NewDecoder(r),
-		e: NewEncoder(w),
+		d: NewDecoder(ctx, r),
+		e: NewEncoder(ctx, w),
 		r: r,
 		w: w,
 		c: c,
@@ -158,7 +158,7 @@ func (c *conn) sendBlock(ctx context.Context, pk int, b *click.Block, compr bool
 		return
 	}
 
-	if b == nil {
+	if b.IsEmpty() {
 		return c.e.Flush()
 	}
 

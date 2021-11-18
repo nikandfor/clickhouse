@@ -19,11 +19,13 @@ type (
 	}
 )
 
-var (
-	_ click.Server = &Proxy{}
-)
+var _ click.Server = &Proxy{}
 
-func New(pool click.ClientPool) *Proxy {
+func New(ctx context.Context, pool click.ClientPool) *Proxy {
+	if tr := tlog.SpanFromContext(ctx); tr.If("dump_client") {
+		pool = clpool.NewDumpPool(pool, 3)
+	}
+
 	return &Proxy{
 		pool: pool,
 	}
@@ -49,20 +51,20 @@ func (p *Proxy) Serve(ctx context.Context, l net.Listener) (err error) {
 }
 
 func (p *Proxy) HandleConn(ctx context.Context, conn net.Conn) (err error) {
-	tr := tlog.SpawnFromContext(ctx, "connection")
+	tr := tlog.SpawnFromContext(ctx, "connection", "remote_addr", conn.RemoteAddr(), "local_addr", conn.LocalAddr())
 	defer func() { tr.Finish("err", err, "", loc.Caller(1)) }()
 
 	ctx = tlog.ContextWithSpan(ctx, tr)
 
-	if tr.If("dump_server,dump_conn") {
-		dc := binary.ConnDump(conn, tr)
+	if tr.If("dump_server_conn,dump_conn") {
+		dc := binary.NewDumpConn(conn, tr)
 		dc.Callers = 5
 		conn = dc
 	}
 
 	defer conn.Close()
 
-	srv := binary.NewServerConn(conn)
+	srv := binary.NewServerConn(ctx, conn)
 
 	srv.Server.Name = "gh/nikandfor/clickhouse"
 
@@ -73,12 +75,20 @@ func (p *Proxy) HandleConn(ctx context.Context, conn net.Conn) (err error) {
 		return errors.Wrap(err, "hello")
 	}
 
+	tlog.SpanFromContext(ctx).V("hello").Printw("server hello", "client_conn", srv)
+
 	var clopts []click.ClientOption
 
-	//	clopts = append(clopts, clpool.WithDatabase(srv.Database))
-	clopts = append(clopts, clpool.WithCredentials(srv.Database, srv.User, srv.Password))
+	//	clopts = append(clopts, click.WithDatabase(srv.Database))
+	clopts = append(clopts, click.WithCredentials(srv.Credentials))
 
 	for err == nil {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
 		err = p.HandleRequest(ctx, srv, clopts...)
 	}
 
@@ -142,6 +152,8 @@ func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn, clopts 
 		return errors.Wrap(err, "send query meta")
 	}
 
+	tr.V("is_insert").Printw("is insert", "is_insert", q.IsInsert())
+
 	if q.IsInsert() {
 		err = p.sendData(ctx, srv, cl, q)
 		if err != nil {
@@ -159,6 +171,12 @@ func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn, clopts 
 
 func (p *Proxy) sendData(ctx context.Context, srv click.ServerConn, cl click.Client, q *click.Query) (err error) {
 	tr := tlog.SpanFromContext(ctx)
+
+	var blocks, rows int
+
+	defer func() {
+		tr.Printw("client-to-server blocks", "blocks", blocks, "rows", rows)
+	}()
 
 	for {
 		pk, err := srv.NextPacket(ctx)
@@ -193,12 +211,23 @@ func (p *Proxy) sendData(ctx context.Context, srv click.ServerConn, cl click.Cli
 			return nil
 		}
 
+		blocks++
+		rows += b.Rows
+
 		tr.V("blocks").Printw("client block", "rows", b.Rows)
 	}
 }
 
 func (p *Proxy) recvResponse(ctx context.Context, srv click.ServerConn, cl click.Client, q *click.Query) (err error) {
 	tr := tlog.SpanFromContext(ctx)
+
+	var blocks, rows int
+
+	defer func() {
+		if blocks != 0 {
+			tr.Printw("server-to-client blocks", "blocks", blocks, "rows", rows)
+		}
+	}()
 
 	for {
 		pk, err := cl.NextPacket(ctx)
@@ -220,8 +249,11 @@ func (p *Proxy) recvResponse(ctx context.Context, srv click.ServerConn, cl click
 
 			err = srv.SendBlock(ctx, b, q.Compressed)
 
-			if b.Rows != 0 {
+			if !b.IsEmpty() {
 				tr.V("blocks").Printw("server block", "rows", b.Rows)
+
+				blocks++
+				rows += b.Rows
 			}
 		case click.ServerException:
 			err = cl.RecvException(ctx)

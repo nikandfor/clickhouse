@@ -16,45 +16,36 @@ type (
 
 		AgentName string
 
+		Credentials clickhouse.Credentials
+
 		net.Dialer
 	}
-
-	DialOption struct {
-		Option
-		F func(addr *string, d *net.Dialer) error
-	}
-
-	BinaryOption struct {
-		Option
-		F func(*binary.Client) error
-	}
 )
+
+var _ clickhouse.ClientPool = &BinaryPool{}
 
 func NewBinaryPool(addr string) *BinaryPool {
 	return &BinaryPool{
 		addr:      addr,
 		AgentName: "gh/nikandfor/clickhouse",
+		Credentials: clickhouse.Credentials{
+			Database: "default",
+			User:     "default",
+		},
 	}
 }
 
 func (p *BinaryPool) Get(ctx context.Context, opts ...clickhouse.ClientOption) (_ clickhouse.Client, err error) {
-	addr := p.addr
-	d := p.Dialer
-
-	var more []clickhouse.ClientOption
+	creds := p.Credentials
 
 	for _, o := range opts {
-		if o, ok := o.(DialOption); ok {
-			err = o.F(&addr, &d)
+		if o, ok := o.(clickhouse.ApplyToCredentialser); ok {
+			err = o.ApplyToCredentials(&creds)
 			if err != nil {
-				return nil, errors.Wrap(err, "dial option")
+				return nil, errors.Wrap(err, "credentials option")
 			}
-		} else {
-			more = append(more, o)
 		}
 	}
-
-	opts = more
 
 	conn, err := net.Dial("tcp", p.addr)
 	if err != nil {
@@ -63,8 +54,8 @@ func (p *BinaryPool) Get(ctx context.Context, opts ...clickhouse.ClientOption) (
 
 	tr := tlog.SpanFromContext(ctx)
 
-	if tr.If("dump_client,dump_conn") {
-		dc := binary.ConnDump(conn, tr)
+	if tr.If("dump_client_conn,dump_conn") {
+		dc := binary.NewDumpConn(conn, tr)
 		dc.Callers = 5
 		conn = dc
 	}
@@ -77,31 +68,17 @@ func (p *BinaryPool) Get(ctx context.Context, opts ...clickhouse.ClientOption) (
 		_ = conn.Close()
 	}()
 
-	cl := binary.NewClient(conn)
+	cl := binary.NewClient(ctx, conn)
 
 	cl.Client.Name = p.AgentName
-
-	more = more[:0]
-
-	for _, o := range opts {
-		if o, ok := o.(BinaryOption); ok {
-			err = o.F(cl)
-			if err != nil {
-				return nil, errors.Wrap(err, "binary option")
-			}
-		} else {
-			more = append(more, o)
-		}
-	}
+	cl.Credentials = creds
 
 	err = cl.Hello(ctx)
 	if err != nil {
 		return nil, errors.Wrap(err, "hello")
 	}
 
-	if len(more) != 0 {
-		return nil, errors.New("unused options: %v", more)
-	}
+	tlog.SpanFromContext(ctx).V("hello").Printw("client hello", "server_conn", cl)
 
 	return cl, nil
 }
