@@ -79,9 +79,14 @@ type (
 	Ver [3]int
 )
 
-var insertRE = regexp.MustCompile(`^(?i)INSERT INTO`) // TODO: WITH
+var (
+	insertRE = regexp.MustCompile(`^(?i)INSERT INTO`) // TODO: WITH
+	execRE   = regexp.MustCompile(`^(?i)(?:CREATE|ALTER|DROP)`)
+)
 
 func (q *Query) IsInsert() bool { return insertRE.MatchString(q.Query) }
+
+func (q *Query) IsExec() bool { return execRE.MatchString(q.Query) }
 
 func (q *Query) Copy() *Query {
 	return &Query{

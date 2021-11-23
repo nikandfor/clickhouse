@@ -15,6 +15,8 @@ type DSN struct {
 	Password string
 
 	Compress bool
+
+	Query url.Values
 }
 
 func Parse(dsn string) (d *DSN, err error) {
@@ -23,14 +25,15 @@ func Parse(dsn string) (d *DSN, err error) {
 		return nil, err
 	}
 
+	q := u.Query()
+
 	d = &DSN{
 		Scheme:   u.Scheme,
 		Hosts:    []string{u.Host},
 		Database: "default",
 		User:     "default",
+		Query:    q,
 	}
-
-	q := u.Query()
 
 	if x := q.Get("database"); x != "" {
 		d.Database = x

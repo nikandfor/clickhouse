@@ -66,4 +66,8 @@ type (
 
 		io.Closer
 	}
+
+	Pinger interface {
+		SendPing(context.Context) error
+	}
 )

@@ -186,6 +186,10 @@ func (c *conn) Close() error {
 	return c.c.Close()
 }
 
+func (c *conn) Flush() error {
+	return c.e.Flush()
+}
+
 func (c *conn) recvClientInfo() (n string, v [3]int, err error) {
 	n, err = c.d.String()
 	if err != nil {

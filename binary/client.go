@@ -26,7 +26,10 @@ type (
 	}
 )
 
-var _ click.Client = &Client{}
+var (
+	_ click.Client = &Client{}
+	_ click.Pinger = &Client{}
+)
 
 var hostname, _ = os.Hostname()
 
@@ -135,6 +138,8 @@ func (c *Client) SendQuery(ctx context.Context, q *click.Query) (_ click.QueryMe
 
 	switch tp {
 	case protocol.ServerData:
+	case protocol.ServerEndOfStream:
+		return nil, nil
 	case protocol.ServerException:
 		return nil, c.RecvException(ctx)
 	default:
@@ -274,6 +279,15 @@ func (c *Client) recvMeta(ctx context.Context, q *click.Query) (meta click.Query
 	}
 
 	return meta, nil
+}
+
+func (c *Client) SendPing(ctx context.Context) (err error) {
+	err = c.sendPacket(int(click.ClientPing))
+	if err != nil {
+		return
+	}
+
+	return c.e.Flush()
 }
 
 func (c *Client) CancelQuery(ctx context.Context) (err error) {

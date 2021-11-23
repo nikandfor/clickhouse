@@ -21,7 +21,7 @@ type (
 
 	flushWriter interface {
 		io.Writer
-		Flush() error
+		Flusher
 	}
 )
 
@@ -60,7 +60,7 @@ func (e *Encoder) Write(p []byte) (int, error) {
 }
 
 func (e *Encoder) Flush() error {
-	if f, ok := e.w.(interface{ Flush() error }); ok {
+	if f, ok := e.w.(Flusher); ok {
 		return f.Flush()
 	}
 

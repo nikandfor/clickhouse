@@ -67,6 +67,14 @@ func (c *DumpConn) Close() (err error) {
 	return
 }
 
+func (c *DumpConn) Flush() (err error) {
+	err = c.Flusher.Flush()
+
+	c.Printf("flushed  %v%s", err, c.from())
+
+	return
+}
+
 func (c *DumpConn) from() string {
 	if c.Callers == 0 {
 		return ""
