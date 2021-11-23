@@ -27,3 +27,5 @@ require (
 	google.golang.org/protobuf v1.27.1 // indirect
 	gopkg.in/yaml.v3 v3.0.0-20200605160147-a5ece683394c // indirect
 )
+
+replace github.com/ClickHouse/clickhouse-go => github.com/nikandfor/clickhouse-go v1.5.2-0.20211123125730-7b296aa1f0ea
