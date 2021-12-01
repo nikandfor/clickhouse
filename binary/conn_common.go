@@ -379,3 +379,5 @@ func (c *conn) sendEmptyData(pk int, compr bool) (err error) {
 
 	return c.sendBlockHeader(0, 0)
 }
+
+func (c *conn) Conn() net.Conn { return c.c }

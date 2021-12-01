@@ -223,7 +223,7 @@ func (p *Batcher) addBlocks(ctx context.Context, batch *batch, blocks []*click.B
 }
 
 func (p *Batcher) flushBatch(ctx context.Context, b *batch) (err error) {
-	tr := b.tr.Spawn("flush", "rows", b.block.Rows)
+	tr := b.tr.Spawn("flush_batch", "rows", b.block.Rows)
 	defer func() { tr.Finish("err", err, "", loc.Caller(1)) }()
 
 	cl, err := p.pool.Get(ctx, b.opts...)

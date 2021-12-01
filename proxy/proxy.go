@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"time"
 
 	click "github.com/nikandfor/clickhouse"
 	"github.com/nikandfor/clickhouse/binary"
@@ -11,19 +12,90 @@ import (
 	"github.com/nikandfor/errors"
 	"github.com/nikandfor/loc"
 	"github.com/nikandfor/tlog"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type (
 	Proxy struct {
 		pool click.ClientPool
 	}
+
+	netCounter struct {
+		net.Conn
+
+		read    int
+		written int
+	}
+
+	blocksRows struct {
+		blocks int
+		rows   int
+	}
 )
 
 var _ click.Server = &Proxy{}
 
+var (
+	reqsElapsed = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+		Namespace: "clickhouse",
+		Subsystem: "proxy",
+		Name:      "request_elapsed_sec",
+		Help:      "client reques elapsed seconds",
+
+		Objectives: map[float64]float64{0.1: 0.1, 0.5: 0.1, 0.9: 0.1, 0.95: 0.1, 0.99: 0.1, 1: 0.1},
+	}, []string{"remote_host", "err"})
+
+	reqsRead = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+		Namespace: "clickhouse",
+		Subsystem: "proxy",
+		Name:      "request_bytes_read",
+		Help:      "client reques bytes read",
+
+		Objectives: map[float64]float64{0.1: 0.1, 0.5: 0.1, 0.9: 0.1, 0.95: 0.1, 0.99: 0.1, 1: 0.1},
+	}, []string{"remote_host", "err"})
+
+	reqsWrite = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+		Namespace: "clickhouse",
+		Subsystem: "proxy",
+		Name:      "request_bytes_written",
+		Help:      "client reques bytes written",
+
+		Objectives: map[float64]float64{0.1: 0.1, 0.5: 0.1, 0.9: 0.1, 0.95: 0.1, 0.99: 0.1, 1: 0.1},
+	}, []string{"remote_host", "err"})
+
+	reqsRows = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+		Namespace: "clickhouse",
+		Subsystem: "proxy",
+		Name:      "request_rows",
+		Help:      "client reques rows written",
+
+		Objectives: map[float64]float64{0.1: 0.1, 0.5: 0.1, 0.9: 0.1, 0.95: 0.1, 0.99: 0.1, 1: 0.1},
+	}, []string{"remote_host", "err"})
+
+	reqsBlocks = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+		Namespace: "clickhouse",
+		Subsystem: "proxy",
+		Name:      "request_blocks",
+		Help:      "client reques rows written",
+
+		Objectives: map[float64]float64{0.1: 0.1, 0.5: 0.1, 0.9: 0.1, 0.95: 0.1, 0.99: 0.1, 1: 0.1},
+	}, []string{"remote_host", "err"})
+)
+
+func init() {
+	prometheus.MustRegister(reqsElapsed, reqsRead, reqsWrite, reqsRows, reqsBlocks)
+}
+
 func New(ctx context.Context, pool click.ClientPool) *Proxy {
 	if tr := tlog.SpanFromContext(ctx); tr.If("dump_client") {
 		pool = clpool.NewDumpPool(pool, 3)
+	}
+
+	if l := tlog.LoggerFromContext(ctx); l != nil {
+		l.RegisterMetric("clickhouse_proxy_request_read_bytes", tlog.MetricCounter, "bytes read from client per request")
+		l.RegisterMetric("clickhouse_proxy_request_written_bytes", tlog.MetricCounter, "bytes written from client per request")
+
+		l.RegisterMetric("clickhouse_proxy_request_elapsed_ns", tlog.MetricSummary, "request duration")
 	}
 
 	return &Proxy{
@@ -51,7 +123,7 @@ func (p *Proxy) Serve(ctx context.Context, l net.Listener) (err error) {
 }
 
 func (p *Proxy) HandleConn(ctx context.Context, conn net.Conn) (err error) {
-	tr := tlog.SpawnFromContext(ctx, "connection", "remote_addr", conn.RemoteAddr(), "local_addr", conn.LocalAddr())
+	tr := tlog.SpawnFromContext(ctx, "connection", "remote_host", host(conn.RemoteAddr()), "local_host", host(conn.LocalAddr()))
 	defer func() { tr.Finish("err", err, "", loc.Caller(1)) }()
 
 	ctx = tlog.ContextWithSpan(ctx, tr)
@@ -63,6 +135,10 @@ func (p *Proxy) HandleConn(ctx context.Context, conn net.Conn) (err error) {
 	}
 
 	defer conn.Close()
+
+	conn = &netCounter{
+		Conn: conn,
+	}
 
 	srv := binary.NewServerConn(ctx, conn)
 
@@ -107,6 +183,47 @@ func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn, clopts 
 
 	tr := tlog.SpawnFromContext(ctx, "request")
 	defer func() { tr.Finish("err", err, "", loc.Caller(1)) }()
+
+	var remoteHost string
+	var mm blocksRows
+
+	defer func() {
+		e := "nil"
+		if err != nil {
+			e = err.Error()
+		}
+
+		reqsElapsed.WithLabelValues(remoteHost, e).Observe(time.Since(tr.StartedAt).Seconds())
+
+		reqsBlocks.WithLabelValues(remoteHost, e).Observe(float64(mm.blocks))
+		reqsRows.WithLabelValues(remoteHost, e).Observe(float64(mm.rows))
+	}()
+
+	if c, ok := srv.(interface{ Conn() net.Conn }); ok {
+		conn := c.Conn()
+
+		remoteHost = host(conn.RemoteAddr())
+
+		if cnt, ok := conn.(*netCounter); ok {
+			r, w := cnt.read, cnt.written
+
+			defer func() {
+				r = cnt.read - r
+				w = cnt.written - w
+
+				tr.Observe("clickhouse_proxy_request_read_bytes", r, "remote_host", remoteHost)
+				tr.Observe("clickhouse_proxy_request_written_bytes", w, "remote_host", remoteHost)
+
+				e := "nil"
+				if err != nil {
+					e = err.Error()
+				}
+
+				reqsRead.WithLabelValues(remoteHost, e).Observe(float64(r))
+				reqsWrite.WithLabelValues(remoteHost, e).Observe(float64(w))
+			}()
+		}
+	}
 
 	ctx = tlog.ContextWithSpan(ctx, tr)
 
@@ -155,7 +272,7 @@ func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn, clopts 
 	tr.V("is_insert").Printw("is insert", "is_insert", q.IsInsert())
 
 	if q.IsInsert() {
-		err = p.sendData(ctx, srv, cl, q)
+		err = p.sendData(ctx, srv, cl, q, &mm)
 		if err != nil {
 			return errors.Wrap(err, "send client data")
 		}
@@ -169,13 +286,18 @@ func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn, clopts 
 	return nil
 }
 
-func (p *Proxy) sendData(ctx context.Context, srv click.ServerConn, cl click.Client, q *click.Query) (err error) {
+func (p *Proxy) sendData(ctx context.Context, srv click.ServerConn, cl click.Client, q *click.Query, mm *blocksRows) (err error) {
 	tr := tlog.SpanFromContext(ctx)
 
 	var blocks, rows int
 
 	defer func() {
 		tr.Printw("client-to-server blocks", "blocks", blocks, "rows", rows)
+
+		if mm != nil {
+			mm.blocks = blocks
+			mm.rows = rows
+		}
 	}()
 
 	for {
@@ -290,4 +412,35 @@ func (p *Proxy) Close() (err error) {
 	err = p.pool.Close()
 
 	return errors.Wrap(err, "connections pool")
+}
+
+func (c *netCounter) Read(p []byte) (n int, err error) {
+	n, err = c.Conn.Read(p)
+
+	c.read += n
+
+	return
+}
+
+func (c *netCounter) Write(p []byte) (n int, err error) {
+	n, err = c.Conn.Write(p)
+
+	c.written += n
+
+	return
+}
+
+func host(a net.Addr) (h string) {
+	switch a := a.(type) {
+	case *net.TCPAddr:
+		return a.IP.String()
+	}
+
+	s := a.String()
+
+	h, _, err := net.SplitHostPort(s)
+	if err != nil {
+		h = s
+	}
+	return
 }
