@@ -151,7 +151,7 @@ func (p *Proxy) HandleConn(ctx context.Context, conn net.Conn) (err error) {
 		return errors.Wrap(err, "hello")
 	}
 
-	tlog.SpanFromContext(ctx).V("hello").Printw("server hello", "client_conn", srv)
+	tr.Printw("hello", "db", srv.Credentials.Database, "user", srv.Credentials.User, "agent", srv.Client.Name, "agent_ver", srv.Client.Ver)
 
 	var clopts []click.ClientOption
 
