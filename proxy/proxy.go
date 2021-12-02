@@ -13,6 +13,7 @@ import (
 	"github.com/nikandfor/loc"
 	"github.com/nikandfor/tlog"
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 type (
@@ -36,55 +37,50 @@ type (
 var _ click.Server = &Proxy{}
 
 var (
-	reqsElapsed = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+	reqsElapsed = promauto.NewSummaryVec(prometheus.SummaryOpts{
 		Namespace: "clickhouse",
 		Subsystem: "proxy",
-		Name:      "request_elapsed_sec",
-		Help:      "client reques elapsed seconds",
+		Name:      "latency_msec",
+		Help:      "client request latency",
 
 		Objectives: map[float64]float64{0.1: 0.1, 0.5: 0.1, 0.9: 0.1, 0.95: 0.1, 0.99: 0.1, 1: 0.1},
-	}, []string{"remote_host", "err"})
+	}, []string{"address"})
 
-	reqsRead = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+	reqsError = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "clickhouse",
 		Subsystem: "proxy",
-		Name:      "request_bytes_read",
-		Help:      "client reques bytes read",
+		Name:      "errors",
+		Help:      "client errors",
+	}, []string{"address", "err"})
 
-		Objectives: map[float64]float64{0.1: 0.1, 0.5: 0.1, 0.9: 0.1, 0.95: 0.1, 0.99: 0.1, 1: 0.1},
-	}, []string{"remote_host", "err"})
-
-	reqsWrite = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+	reqsRead = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "clickhouse",
 		Subsystem: "proxy",
-		Name:      "request_bytes_written",
-		Help:      "client reques bytes written",
+		Name:      "read_bytes",
+		Help:      "client bytes read",
+	}, []string{"address"})
 
-		Objectives: map[float64]float64{0.1: 0.1, 0.5: 0.1, 0.9: 0.1, 0.95: 0.1, 0.99: 0.1, 1: 0.1},
-	}, []string{"remote_host", "err"})
-
-	reqsRows = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+	reqsWrite = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "clickhouse",
 		Subsystem: "proxy",
-		Name:      "request_rows",
-		Help:      "client reques rows written",
+		Name:      "write_bytes",
+		Help:      "client bytes written",
+	}, []string{"address"})
 
-		Objectives: map[float64]float64{0.1: 0.1, 0.5: 0.1, 0.9: 0.1, 0.95: 0.1, 0.99: 0.1, 1: 0.1},
-	}, []string{"remote_host", "err"})
-
-	reqsBlocks = prometheus.NewSummaryVec(prometheus.SummaryOpts{
+	reqsRows = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "clickhouse",
 		Subsystem: "proxy",
-		Name:      "request_blocks",
-		Help:      "client reques rows written",
+		Name:      "rows_total",
+		Help:      "client rows written",
+	}, []string{"address"})
 
-		Objectives: map[float64]float64{0.1: 0.1, 0.5: 0.1, 0.9: 0.1, 0.95: 0.1, 0.99: 0.1, 1: 0.1},
-	}, []string{"remote_host", "err"})
+	reqsBlocks = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "clickhouse",
+		Subsystem: "proxy",
+		Name:      "blocks_total",
+		Help:      "client blocks written",
+	}, []string{"address"})
 )
-
-func init() {
-	prometheus.MustRegister(reqsElapsed, reqsRead, reqsWrite, reqsRows, reqsBlocks)
-}
 
 func New(ctx context.Context, pool click.ClientPool) *Proxy {
 	if tr := tlog.SpanFromContext(ctx); tr.If("dump_client") {
@@ -188,15 +184,14 @@ func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn, clopts 
 	var mm blocksRows
 
 	defer func() {
-		e := "nil"
 		if err != nil {
-			e = err.Error()
+			reqsError.WithLabelValues(remoteHost, err.Error()).Add(1)
 		}
 
-		reqsElapsed.WithLabelValues(remoteHost, e).Observe(time.Since(tr.StartedAt).Seconds())
+		reqsElapsed.WithLabelValues(remoteHost).Observe(time.Since(tr.StartedAt).Seconds() * 1000)
 
-		reqsBlocks.WithLabelValues(remoteHost, e).Observe(float64(mm.blocks))
-		reqsRows.WithLabelValues(remoteHost, e).Observe(float64(mm.rows))
+		reqsBlocks.WithLabelValues(remoteHost).Add(float64(mm.blocks))
+		reqsRows.WithLabelValues(remoteHost).Add(float64(mm.rows))
 	}()
 
 	if c, ok := srv.(interface{ Conn() net.Conn }); ok {
@@ -214,13 +209,8 @@ func (p *Proxy) HandleRequest(ctx context.Context, srv click.ServerConn, clopts 
 				tr.Observe("clickhouse_proxy_request_read_bytes", r, "remote_host", remoteHost)
 				tr.Observe("clickhouse_proxy_request_written_bytes", w, "remote_host", remoteHost)
 
-				e := "nil"
-				if err != nil {
-					e = err.Error()
-				}
-
-				reqsRead.WithLabelValues(remoteHost, e).Observe(float64(r))
-				reqsWrite.WithLabelValues(remoteHost, e).Observe(float64(w))
+				reqsRead.WithLabelValues(remoteHost).Add(float64(r))
+				reqsWrite.WithLabelValues(remoteHost).Add(float64(w))
 			}()
 		}
 	}
